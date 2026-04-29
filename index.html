@@ -1762,7 +1762,9 @@ function syncFOBFromSheet() {
       const soja0 = fobData[primera].soja;
       if (statusEl) statusEl.innerHTML =
         '✅ FOB al ' + (fobActualizado || 'hoy') + ' — ' + n + ' pos · Soja ' + primera + ': <strong>' + soja0 + '</strong>';
-      applyFOBToRetenciones();
+      // Refresh position dropdowns with FOB data
+      if (retMode) retChangeCultivo();
+      else applyFOBToRetenciones();
 
     } catch(e) {
       if (statusEl) statusEl.innerHTML = '⚠️ Error FOB: ' + e.message;
@@ -1813,44 +1815,37 @@ function applyFOBToRetenciones() {
   const keyMap = { soja: 'soja', maiz: 'maiz', trigo: 'trigo', girasol: 'aceiteGirasol' };
   const key = keyMap[cultivo] || 'soja';
 
-  // Convert A3 code (JUL26, MAY26) → Sheet label (JUL 2026, MAY 2026)
-  function toLabel(pos) {
-    if (!pos) return '';
-    const m = String(pos).toUpperCase().match(/([A-Z]{3})(\d{2})/);
-    if (m) return m[1] + ' 20' + m[2];
-    // Already in label format like "JUL 2026"
-    return String(pos).toUpperCase();
-  }
-
+  // Positions are now FOB Sheet keys directly (e.g. "JUL 2026")
   function getRow(pos) {
-    const label = toLabel(pos);
-    if (fobData[label]) return fobData[label];
-    // Fuzzy match: find key that starts with same 3-letter month
-    const month = label.substring(0, 3);
-    const year  = label.substring(4, 8);
+    if (!pos || pos === 'sin_datos') return fobData[Object.keys(fobData)[0]];
+    if (fobData[pos]) return fobData[pos];
+    // Fallback fuzzy match
+    const s = String(pos).toUpperCase();
+    const m = s.match(/([A-Z]{3}).*?(\d{2,4})/);
+    if (!m) return fobData[Object.keys(fobData)[0]];
+    const month = m[1];
+    const year = m[2].slice(-2);
     for (const k of Object.keys(fobData)) {
-      if (k.startsWith(month) && k.includes(year)) return fobData[k];
+      if (k.startsWith(month) && k.endsWith(year)) return fobData[k];
     }
-    return null;
+    return fobData[Object.keys(fobData)[0]];
   }
 
   // --- Position 1 ---
   const selPos1 = document.getElementById('ret-posicion');
   const pos1 = selPos1 ? (selPos1.options[selPos1.selectedIndex]?.value || '') : '';
-  const row1 = getRow(pos1) || fobData[Object.keys(fobData)[0]];
+  const row1 = getRow(pos1);
 
   if (row1) {
     const fob1 = row1[key] || 0;
-    if (fob1 > 0) {
-      const el = document.getElementById('ret-fob');
-      if (el) el.value = fob1.toFixed(0);
-    }
-    // Soja crush fields — always update regardless of mode
+    const fobEl = document.getElementById('ret-fob');
+    if (fobEl && fob1 > 0) fobEl.value = fob1.toFixed(0);
+
     if (cultivo === 'soja') {
       const elAce = document.getElementById('ret-crush-fob-aceite');
       const elHar = document.getElementById('ret-crush-fob-harina');
-      if (elAce) elAce.value = (row1.aceite > 0 ? row1.aceite : parseFloat(elAce.value) || 0).toFixed(0);
-      if (elHar) elHar.value = (row1.harina > 0 ? row1.harina : parseFloat(elHar.value) || 0).toFixed(0);
+      if (elAce && row1.aceite > 0) elAce.value = row1.aceite.toFixed(0);
+      if (elHar && row1.harina > 0) elHar.value = row1.harina.toFixed(0);
     }
   }
 
@@ -1859,7 +1854,7 @@ function applyFOBToRetenciones() {
   const fobEl2  = document.getElementById('ret-fob-2');
   if (selPos2 && fobEl2) {
     const pos2 = selPos2.options[selPos2.selectedIndex]?.value || '';
-    const row2 = getRow(pos2) || row1;
+    const row2 = getRow(pos2);
     if (row2) {
       const fob2 = row2[key] || 0;
       if (fob2 > 0) fobEl2.value = fob2.toFixed(0);
@@ -1867,6 +1862,10 @@ function applyFOBToRetenciones() {
   }
 
   retCalc();
+}
+
+function onRetPos2Change() {
+  applyFOBToRetenciones();
 }
 
 function onRetPos2Change() {
@@ -2944,21 +2943,37 @@ const RET_DEFAULTS = {
   girasol: { fob: 520, ret: 4.5, fobbing: 14, fasObj: 475, positions: [] }
 };
 
+function getFOBPositions() {
+  // Build position list directly from FOB Sheet data
+  // Returns [{ val: 'ABR 2026', label: 'Abr 2026' }, ...]
+  if (Object.keys(fobData).length === 0) return null;
+  const MONTH_SHORT = {
+    'ENE':'Ene','FEB':'Feb','MAR':'Mar','ABR':'Abr','MAY':'May','JUN':'Jun',
+    'JUL':'Jul','AGO':'Ago','SEP':'Sep','OCT':'Oct','NOV':'Nov','DIC':'Dic'
+  };
+  return Object.keys(fobData).map(k => {
+    const m = k.match(/([A-Z]{3}) (20\d{2})/);
+    const label = m ? (MONTH_SHORT[m[1]] || m[1]) + ' ' + m[2].slice(2) : k;
+    return { val: k, label };
+  });
+}
+
 function retChangeCultivo() {
   const cultivo = document.getElementById('ret-cultivo').value;
   const d = RET_DEFAULTS[cultivo];
-  document.getElementById('ret-fob').value = d.fob;
   document.getElementById('ret-pct').value = d.ret;
   document.getElementById('ret-fobbing').value = d.fobbing;
   document.getElementById('ret-fas-obj').value = d.fasObj;
-  
-  let positions = getSheetPositions(cultivo);
+
+  // Positions come from FOB Sheet (not A3)
+  let positions = getFOBPositions();
   if (!positions || positions.length === 0) {
-    positions = d.positions.length > 0 ? d.positions : [{ val: 'sin_datos', label: '⚠ Sincronizar A3' }];
+    positions = [{ val: 'sin_datos', label: '⚠ Actualizar FOB' }];
+    document.getElementById('ret-fob').value = d.fob;
   }
 
   const sel1 = document.getElementById('ret-posicion');
-  sel1.innerHTML = positions.map(p => `<option value="${p.val}" ${p.precio ? `data-precio="${p.precio}"` : ''}>${p.label}</option>`).join('');
+  sel1.innerHTML = positions.map(p => `<option value="${p.val}">${p.label}</option>`).join('');
 
   const hasPos2 = (cultivo === 'maiz' || cultivo === 'trigo');
   document.getElementById('field-pos-2').style.display = hasPos2 ? 'block' : 'none';
@@ -2966,13 +2981,12 @@ function retChangeCultivo() {
 
   if (hasPos2) {
     const sel2 = document.getElementById('ret-posicion-2');
-    sel2.innerHTML = positions.map(p => `<option value="${p.val}" ${p.precio ? `data-precio="${p.precio}"` : ''}>${p.label}</option>`).join('');
+    sel2.innerHTML = positions.map(p => `<option value="${p.val}">${p.label}</option>`).join('');
     if (positions.length > 1) sel2.selectedIndex = 1;
-    document.getElementById('ret-fob-2').value = d.fob2;
     document.getElementById('ret-fas-obj-2').value = d.fasObj2;
   }
 
-  // Apply FOB from sheet AFTER positions are populated
+  // Fill FOB values from sheet for selected positions
   applyFOBToRetenciones();
 }
 
