@@ -1705,11 +1705,13 @@ function syncFOBFromSheet() {
   const statusEl = document.getElementById('fob-status');
   if (statusEl) statusEl.innerHTML = '⏳ Cargando FOB...';
 
+  return new Promise((resolveFOB, rejectFOB) => {
   const cbName = '_fobCB_' + Date.now();
   const timer = setTimeout(() => {
     delete window[cbName];
     if (script.parentNode) script.remove();
     if (statusEl) statusEl.innerHTML = '⚠️ Timeout — usando valores manuales';
+    rejectFOB(new Error('timeout'));
   }, 12000);
 
   window[cbName] = function(response) {
@@ -1765,9 +1767,11 @@ function syncFOBFromSheet() {
       // Refresh position dropdowns with FOB data
       if (retMode) retChangeCultivo();
       else applyFOBToRetenciones();
+      resolveFOB();
 
     } catch(e) {
       if (statusEl) statusEl.innerHTML = '⚠️ Error FOB: ' + e.message;
+      rejectFOB(e);
       console.warn('FOB JSONP error:', e);
     }
   };
@@ -1778,8 +1782,10 @@ function syncFOBFromSheet() {
     clearTimeout(timer);
     delete window[cbName];
     if (statusEl) statusEl.innerHTML = '⚠️ No se pudo conectar con Sheet FOB';
+    rejectFOB(new Error('onerror'));
   };
   document.head.appendChild(script);
+  }); // end Promise
 }
 
 function getFOBForCultivo(cultivo, posicion) {
@@ -2571,9 +2577,12 @@ function toggleRetenciones() {
   document.getElementById('btn-update-primas').style.display = 'none';
   renderTabs();
   renderModules();
-  retChangeCultivo();
-  // Sync FOB from sheet when entering retenciones module
-  if (Object.keys(fobData).length === 0) syncFOBFromSheet();
+  // Always sync FOB first, then populate positions with FOB data
+  if (Object.keys(fobData).length === 0) {
+    syncFOBFromSheet().then(() => retChangeCultivo()).catch(() => retChangeCultivo());
+  } else {
+    retChangeCultivo();
+  }
 }
 
 function switchTab(idx) {
